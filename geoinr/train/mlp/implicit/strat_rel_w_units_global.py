@@ -34,12 +34,12 @@ options = vars(prog_args)
 
 # Load Data
 # Get Interface Data
-interface_file = os.path.join(args.ROOT_DIR, prog_args.datadir, prog_args.dataset, 'marker_subset3.vtp')
+interface_file = os.path.join(args.ROOT_DIR, prog_args.datadir, prog_args.dataset, 'marker_subset.vtp')
 interface_info_file = os.path.join(args.ROOT_DIR, prog_args.datadir, prog_args.dataset, 'marker_info.csv')
 interface = InterfaceData(interface_file, 2, interface_info_file)
 
 # Get Unit Data
-unit_file = os.path.join(args.ROOT_DIR, prog_args.datadir, prog_args.dataset, 'unit_subset3.vtp')
+unit_file = os.path.join(args.ROOT_DIR, prog_args.datadir, prog_args.dataset, 'unit_subset.vtp')
 units = UnitData(unit_file, interface.series.unit_level_code)
 
 coords = concat_coords_from_datasets(interface.coords, units.coords)
