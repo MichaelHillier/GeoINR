@@ -32,10 +32,18 @@ Faults are unfortunately not supported yet in the methodology. This aspect is ap
 Distributed training over multiple GPUs will be released at a later date. This code will be able to be run on AWS.
 
 # GMD Paper
-This scripts used for modelling were: strat_rel_w_global.py and strat_rel_w_units_global.py
+This scripts used for modelling were: strat_rel_w_global.py and strat_rel_w_units_global.py.
+If scripts are to be ran in the terminal the location of the GeoINR code is need to avoid module not found errors. 
+Examples. On linux:
+```
+export PYTHONPATH="${PYTHONPATH}:/home/ubuntu/GeoINR"
+```
+On windows, environment variables are required to be edited. Add Variable = PYTHONPATH, Value = {PATH_TO_GeoINR}.
+Then you can navigate to where the training scripts are and run (e.g., python strat_rel_w_global.py).
+
 Geometrical initialization: To initialize network variables for planar geometry we trained using the multilayered dataset (geoinr/data/multilayer) along with the script level_constrained.py
 
-Results were generated using:
+Results were generated on Windows 10 within Pycharm using:
 
 - pytorch 1.10.2 with cuda version 10.2
 - tensorboard 2.2.1
