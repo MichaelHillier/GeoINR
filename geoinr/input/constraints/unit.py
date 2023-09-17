@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import torch
+from geoinr.input.constraints import series
 from geoinr.input.readers import reader_xml_polydata_file
 from geoinr.utils.vtk_utils import add_np_property_to_vtk_object, create_vtk_polydata_from_coords_and_property
 from vtkmodules.all import vtkPolyData
@@ -39,6 +40,7 @@ class UnitData(object):
         self.coords = None
         self.unit_data = None
         self.unit_dict = None
+        self.series = None
         self.unique_unit_ids = None
         self.class_weights = None
         self.unit_id_to_unit_level = {}
@@ -56,7 +58,7 @@ class UnitData(object):
         elif len(args) == 2:
             if isinstance(args[0], str):
                 coords, unit_data = self.build_data_from_vtk_file(args[0])
-                self.build_from_coords_unit_data_and_unit_dict(coords, unit_data, args[1])
+                self.build_from_coords_unit_data_and_series(coords, unit_data, args[1])
             elif isinstance(args[0], np.ndarray):
                 self.build_from_coords_and_unit_data(args[0], args[1])
         elif len(args) == 3:
@@ -117,9 +119,10 @@ class UnitData(object):
         for i in range(self.n_class_pts):
             self.unit_indices[self.unit_data[i]].append(i)
 
-    def build_from_coords_unit_data_and_unit_dict(self, coords: np.ndarray, unit_data: np.ndarray,
-                                                  unit_dict: dict):
-        self.unit_dict = unit_dict
+    def build_from_coords_unit_data_and_series(self, coords: np.ndarray, unit_data: np.ndarray,
+                                               series_struct: series.Series):
+        self.series = series_struct
+        self.unit_dict = series_struct.unit_level_code
         self.coords = coords
         self.n_class_pts = unit_data.shape[0]
         unique_unit_ids, counts = np.unique(unit_data, return_counts=True)
@@ -127,18 +130,18 @@ class UnitData(object):
         min_count = counts.min()
         class_weight_dict = {unique_unit_ids[i]: (max_count / counts[i]) for i in range(unique_unit_ids.size)}
         # Check if unique unit id (integer) are consistent with unit_level (dict)
-        assert set(unique_unit_ids).issubset(unit_dict.values()), "unexpected new value found in supplied unit dataset"
+        assert set(unique_unit_ids).issubset(self.unit_dict.values()), "unexpected new value found in supplied unit dataset"
         # find the classes there are NOT sampled by the data
-        missing_classes = np.setdiff1d(np.fromiter(unit_dict.values(), dtype=int), unique_unit_ids)
+        missing_classes = np.setdiff1d(np.fromiter(self.unit_dict.values(), dtype=int), unique_unit_ids)
         for missing_class in missing_classes:
             class_weight_dict[missing_class] = 1.0
         class_weight_dict = dict(sorted(class_weight_dict.items()))
         self.class_weights = np.fromiter(class_weight_dict.values(), dtype=float)
-        self.n_classes = len(unit_dict.values())
+        self.n_classes = len(self.unit_dict.values())
         # Re-map unit ids to [0, ..., n_classes - 1] range
         unit_level_to_unit_id = {}
         self.unit_id_to_unit_level = {}
-        for unit_id, unit_level in unit_dict.items():
+        for unit_id, unit_level in self.unit_dict.items():
             unit_level_to_unit_id[unit_level] = unit_id
             self.unit_id_to_unit_level[unit_id] = unit_level
         self.unit_data = np.vectorize(unit_level_to_unit_id.get)(unit_data).flatten()

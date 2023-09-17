@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from geoinr.input.constraints.interface import Series
+from geoinr.input.constraints import series
 from geoinr.utils import derivatives
 
 
@@ -68,7 +68,7 @@ def unit_error(s_above, s_grad_norm_above, horizon_s_above,
             return below_error.mean()
 
 
-def unit_losses(scalar_pred, scalar_coords, unit_indices, series: Series):
+def unit_losses(scalar_pred, scalar_coords, unit_indices, series_struct: series.Series):
     # generate grad norm
     scalar_grad = derivatives.jacobian(scalar_pred, scalar_coords)  # [n_pts, n_series, 3]
     scalar_grad_norm = torch.norm(scalar_grad, p=2, dim=2)
@@ -82,12 +82,12 @@ def unit_losses(scalar_pred, scalar_coords, unit_indices, series: Series):
     # scalar_pred_np = scalar_pred.detach().cpu().numpy()
 
     unit_i_losses = []
-    for unit_id in range(series.n_unit_classes):
+    for unit_id in range(series_struct.n_unit_classes):
         unit_id_indices = unit_indices[unit_id]
-        horizon_ids_above = series.above_below_horizons_and_series_for_units[unit_id]['above_horizons']
-        series_ids_above = series.above_below_horizons_and_series_for_units[unit_id]['above_series']
-        horizons_ids_below = series.above_below_horizons_and_series_for_units[unit_id]['below_horizons']
-        series_ids_below = series.above_below_horizons_and_series_for_units[unit_id]['below_series']
+        horizon_ids_above = series_struct.above_below_horizons_and_series_for_units[unit_id]['above_horizons']
+        series_ids_above = series_struct.above_below_horizons_and_series_for_units[unit_id]['above_series']
+        horizons_ids_below = series_struct.above_below_horizons_and_series_for_units[unit_id]['below_horizons']
+        series_ids_below = series_struct.above_below_horizons_and_series_for_units[unit_id]['below_series']
         if len(unit_id_indices) == 0:
             continue
         if horizon_ids_above is None:
@@ -97,7 +97,7 @@ def unit_losses(scalar_pred, scalar_coords, unit_indices, series: Series):
         else:
             s_above = scalar_pred[unit_id_indices][:, series_ids_above]
             s_grad_norm_above = scalar_grad_norm[unit_id_indices][:, series_ids_above]
-            horizon_s_above = series.mean_scalar_values_for_series.view(1, -1)[0, [horizon_ids_above]]
+            horizon_s_above = series_struct.mean_scalar_values_for_series.view(1, -1)[0, [horizon_ids_above]]
             # s_above_np = s_above.detach().cpu().numpy()
             # s_grad_norm_above_np = s_grad_norm_above.detach().cpu().numpy()
         if horizons_ids_below is None:
@@ -107,7 +107,7 @@ def unit_losses(scalar_pred, scalar_coords, unit_indices, series: Series):
         else:
             s_below = scalar_pred[unit_id_indices][:, series_ids_below]
             s_grad_norm_below = scalar_grad_norm[unit_id_indices][:, series_ids_below]
-            horizon_s_below = series.mean_scalar_values_for_series.view(1, -1)[0, [horizons_ids_below]]
+            horizon_s_below = series_struct.mean_scalar_values_for_series.view(1, -1)[0, [horizons_ids_below]]
             # s_below_np = s_below.detach().cpu().numpy()
             # s_grad_norm_below_np = s_grad_norm_below.detach().cpu().numpy()
         unit_id_error = unit_error(s_above, s_grad_norm_above, horizon_s_above,

@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
-from geoinr.input.constraints.interface import InterfaceData, Series
+import time
+from geoinr.input.constraints.interface import InterfaceData
+from geoinr.input.constraints import series
 from geoinr.input.constraints.unit import UnitData
 from geoinr.input.grids import Grid
 import pyvista as pv
@@ -122,6 +124,14 @@ def extract_iso_surfaces_from_grid(grid, prop_name, iso_values, surface_indices=
         level = np.vectorize(map_dict.get)(interfaces.point_data[prop_name])
         interfaces.clear_point_data()
         interfaces.point_data['horizon_index'] = level
+        separated_interfaces_att = []
+        for i in range(len(separated_interfaces)):
+            separated_interface_i = pv.PolyData(separated_interfaces[i])
+            level = np.vectorize(map_dict.get)(separated_interface_i.point_data[prop_name])
+            separated_interface_i.clear_point_data()
+            separated_interface_i.point_data['horizon_index'] = level
+            separated_interfaces_att.append(separated_interface_i)
+        separated_interfaces = separated_interfaces_att
 
     # convert to pyvista PolyData
     interfaces = pv.PolyData(interfaces)
@@ -172,10 +182,20 @@ def compute_distance_metrics_between_constraints_and_modelled_surfaces(
     #   3) level properties are in the correct order and IS normalized.
     # IF level_data_mode == 1 || 3 unique_constraint_levels have to be DESCENDING
     # IF level_data_mode == 2 unique_constraint_levels have to be ASCENDING
+    # First determine the property name for the 'Level' property - sometimes it's a different name
+    # Check if the 'level' name is there (capitalization agnostic), else assume it's the first name
+    prop_names = interfaces.interface_vtk.array_names
+    assert len(prop_names) != 0, "there are no properties on interface vtk"
+    assert prop_names[0] != 'Normals', "only property on interface vtk is Normals"
+    level_prop = prop_names[0]
+    for i, name in enumerate(prop_names):
+        if name.lower() == 'level':
+            level_prop = name
+
     if interfaces.level_data_mode == 2:
-        unique_constraint_levels = np.unique(interfaces.interface_vtk.point_data['level'])
+        unique_constraint_levels = np.unique(interfaces.interface_vtk.point_data[level_prop])
     else:
-        unique_constraint_levels = np.unique(interfaces.interface_vtk.point_data['level'])[::-1]
+        unique_constraint_levels = np.unique(interfaces.interface_vtk.point_data[level_prop])[::-1]
 
     assert len(surfaces) == unique_constraint_levels.size, \
         "number of modelled horizons and unique level constraints do not match"
@@ -188,7 +208,7 @@ def compute_distance_metrics_between_constraints_and_modelled_surfaces(
     for i, horizon_i_mesh in enumerate(surfaces):
 
         constraints_i = interfaces.interface_vtk.extract_points(
-            interfaces.interface_vtk.point_data['level'] == unique_constraint_levels[i])
+            interfaces.interface_vtk.point_data[level_prop] == unique_constraint_levels[i])
         constraints_i = pv.PolyData(constraints_i.points)
         _ = constraints_i.compute_implicit_distance(horizon_i_mesh, inplace=True)
         dist_i = np.abs(constraints_i['implicit_distance'])
@@ -199,7 +219,7 @@ def compute_distance_metrics_between_constraints_and_modelled_surfaces(
 
         if interfaces_test is not None:
             test_constraints_i = interfaces_test.interface_vtk.extract_points(
-                interfaces_test.interface_vtk.point_data['level'] == unique_constraint_levels[i])
+                interfaces_test.interface_vtk.point_data[level_prop] == unique_constraint_levels[i])
             test_constraints_i = pv.PolyData(test_constraints_i.points)
             _ = test_constraints_i.compute_implicit_distance(horizon_i_mesh, inplace=True)
             t_dist_i = np.abs(test_constraints_i['implicit_distance'])
@@ -256,7 +276,7 @@ def write_dict_data_to_file(dict_obj: dict, file_obj):
 class ModelOutput(object):
     def __init__(self, args, interface=None, orientation=None, unit=None, grid=None,
                  model_metrics=None, vertical_exaggeration=1, debug=False,
-                 alternate_output_name=None, interface_test=None):
+                 alternate_output_name=None, interface_test=None, horizon_distance_metrics=False):
         self.args = args
         self.vertical_exaggeration = vertical_exaggeration
         self.debug = debug
@@ -296,10 +316,11 @@ class ModelOutput(object):
 
         if self.uncut_surfaces:
             if interface is not None:
-                compute_distance_metrics_between_constraints_and_modelled_surfaces(
-                    interface,
-                    self.uncut_surfaces,
-                    interface_test)
+                if horizon_distance_metrics:
+                    compute_distance_metrics_between_constraints_and_modelled_surfaces(
+                        interface,
+                        self.uncut_surfaces,
+                        interface_test)
                 self.__process_interface_input(interface)
                 if interface_test is not None:
                     self.__process_interface_test_input(interface_test)
@@ -376,7 +397,7 @@ class ModelOutput(object):
                         else:
                             surf_filename = self.args.model_dir + '/' + self.alternate_name + '_uncut_surf' + str(i) + ".vtp"
                         write_polydata_file(surf_filename, surface)
-                self.cut_series_iso_surfacesV2(grid.series)
+                self.cut_series_iso_surfacesV3(grid.series)
             self.surfaces = append_iso_surfaces(self.args.model_dir, self.surfaces, self.debug)
 
     def add_model_grid(self, grid):
@@ -432,9 +453,9 @@ class ModelOutput(object):
         # don't need to vertical exaggeration (if vertical_exaggeration != 1) since grid was already exaggerated;
         # resulting iso surface would be exaggerated by default
 
-    def cut_series_iso_surfaces(self, series: Series):
+    def cut_series_iso_surfaces(self, series_struct: series.Series):
         """
-        :param series: contains all the series data/information
+        :param series_struct: contains all the series data/information
         This function keeps basement continuous (younger unconformities can't cut basement). This was behavior requested
         by Karine. I don't think this is the best approach. V2 below is better imo.
         Cuts isosurfaces, each described by their own scalar field, in a manner respecting the geological history.
@@ -449,7 +470,7 @@ class ModelOutput(object):
             if type(self.surfaces[i]) != pv.PolyData:
                 raise TypeError("Surface a not a pyvista PolyData when cutting iso_surfaces")
 
-        unconformity_series_ids = series.get_unconformity_series_ids()
+        unconformity_series_ids = series_struct.get_unconformity_series_ids()
         # cut all unconformities except basement by basement unconformity
         for i in range(unconformity_series_ids.size - 1):
             clipped_surface = self.surfaces[unconformity_series_ids[i]].clip_surface(
@@ -464,7 +485,7 @@ class ModelOutput(object):
             # get series_ids of unconformities younger than u_series_id arranged older to younger
             # so that we progressively cut current unconformity by younger unconformities (how these are cut
             # naturally in the geological series of events)
-            younger_u_series_ids = series.get_unconformity_series_ids_younger_than(u_series_id)
+            younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(u_series_id)
             for younger_u_series_id in younger_u_series_ids:
                 clipped_surface = self.surfaces[u_series_id].clip_surface(self.surfaces[younger_u_series_id],
                                                                           invert=False)
@@ -472,18 +493,18 @@ class ModelOutput(object):
                     self.surfaces[u_series_id] = clipped_surface
 
         # cut all onlap scalar fields (onlap_series_id) by unconformities younger than onlap_series_id
-        onlap_series_ids = series.get_onlap_series_ids()[::-1]
+        onlap_series_ids = series_struct.get_onlap_series_ids()[::-1]
         for onlap_series_id in onlap_series_ids:
             # get series_ids of unconformities younger than onlap_series_id arranged older to younger
             # so that we progressively cut onlap series by unconformities younger than onlap_series_id
-            younger_u_series_ids = series.get_unconformity_series_ids_younger_than(onlap_series_id)
+            younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(onlap_series_id)
             for younger_u_series_id in younger_u_series_ids:
                 clipped_surface = self.surfaces[onlap_series_id].clip_surface(self.surfaces[younger_u_series_id],
                                                                               invert=False)
                 if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
                     self.surfaces[onlap_series_id] = clipped_surface
             # cut surface from unconformities below
-            older_u_series_ids = series.get_unconformity_series_ids_below(onlap_series_id)
+            older_u_series_ids = series_struct.get_unconformity_series_ids_below(onlap_series_id)
             # cut only the unconformity below onlap_series_id AND the last unconformity (basement)
             older_u_series_ids = np.array([older_u_series_ids[0], older_u_series_ids[-1]])
             for older_u_series_id in older_u_series_ids:
@@ -491,9 +512,59 @@ class ModelOutput(object):
                 if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
                     self.surfaces[onlap_series_id] = clipped_surface
 
-    def cut_series_iso_surfacesV2(self, series: Series):
+    def cut_series_iso_surfacesV2(self, series_struct: series.Series):
         """
-        :param series: contains all the series data/information
+        :param series_struct: contains all the series data/information
+        In this function, any unconformity can cut anything that is older. Best approach IMO.
+        Cuts isosurfaces, each described by their own scalar field, in a manner respecting the geological history.
+        Use pyvista's clip_surface()
+        If a surface a is being clipped by surface b below (older) a.clip_surface(b)
+        If a surface a is being clipped by surface b above (younger) a.clip_surface(b, invert=False)
+        There is a lot of complication related to keeping the basement continuous which is why there is so much code.
+        """
+        n_series = len(self.surfaces)
+        for i in range(n_series):
+            if type(self.surfaces[i]) != pv.PolyData:
+                raise TypeError("Surface a not a pyvista PolyData when cutting iso_surfaces")
+
+        unconformity_series_ids = series_struct.get_unconformity_series_ids()
+
+        # get unconformity series ids arranged older to younger
+        unconformity_series_ids = unconformity_series_ids[::-1]
+        for u_series_id in unconformity_series_ids:
+            # get series_ids of unconformities younger than u_series_id arranged older to younger
+            # so that we progressively cut current unconformity by younger unconformities (how these are cut
+            # naturally in the geological series of events)
+            younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(u_series_id)
+            for younger_u_series_id in younger_u_series_ids:
+                clipped_surface = self.surfaces[u_series_id].clip_surface(self.surfaces[younger_u_series_id],
+                                                                          invert=False)
+                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                    self.surfaces[u_series_id] = clipped_surface
+
+        # cut all onlap scalar fields (onlap_series_id) by unconformities younger than onlap_series_id
+        onlap_series_ids = series_struct.get_onlap_series_ids()[::-1]
+        for onlap_series_id in onlap_series_ids:
+            # get series_ids of unconformities younger than onlap_series_id arranged older to younger
+            # so that we progressively cut onlap series by unconformities younger than onlap_series_id
+            younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(onlap_series_id)
+            for younger_u_series_id in younger_u_series_ids:
+                clipped_surface = self.surfaces[onlap_series_id].clip_surface(self.surfaces[younger_u_series_id],
+                                                                              invert=False)
+                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                    self.surfaces[onlap_series_id] = clipped_surface
+            # cut surface from unconformities below
+            older_u_series_ids = series_struct.get_unconformity_series_ids_below(onlap_series_id)
+            # cut only the unconformity below onlap_series_id AND the last unconformity (basement)
+            older_u_series_ids = np.array([older_u_series_ids[0], older_u_series_ids[-1]])
+            for older_u_series_id in older_u_series_ids:
+                clipped_surface = self.surfaces[onlap_series_id].clip_surface(self.surfaces[older_u_series_id])
+                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                    self.surfaces[onlap_series_id] = clipped_surface
+
+    def cut_series_iso_surfacesV3(self, series_struct: series.Series):
+        """
+        :param series_struct: contains all the series data/information
         In this function, any unconformity can cut anything that is older. Best approach IMO.
         Cuts isosurfaces, each described by their own scalar field, in a manner respecting the geological history.
         Use pyvista's clip_surface()
@@ -507,40 +578,49 @@ class ModelOutput(object):
             if type(self.surfaces[i]) != pv.PolyData:
                 raise TypeError("Surface a not a pyvista PolyData when cutting iso_surfaces")
 
-        unconformity_series_ids = series.get_unconformity_series_ids()
+        start_time = time.time()
+        basement_interface_id, basement_series_id = series_struct.get_basement_interface_id_and_series_id()
+        # basement can cut everything. e.g. everything younger sits ontop of it
+        series_younger_than_basement = np.arange(n_series - 1)[::-1]  # older to younger
+        if basement_interface_id:
+            for s_id in series_younger_than_basement:
+                clipped_surface = self.surfaces[s_id].clip_surface(self.surfaces[basement_series_id])
+                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                    self.surfaces[s_id] = clipped_surface
 
-        # get unconformity series ids arranged older to younger
-        unconformity_series_ids = unconformity_series_ids[::-1]
-        for u_series_id in unconformity_series_ids:
-            # get series_ids of unconformities younger than u_series_id arranged older to younger
-            # so that we progressively cut current unconformity by younger unconformities (how these are cut
-            # naturally in the geological series of events)
-            younger_u_series_ids = series.get_unconformity_series_ids_younger_than(u_series_id)
-            for younger_u_series_id in younger_u_series_ids:
-                clipped_surface = self.surfaces[u_series_id].clip_surface(self.surfaces[younger_u_series_id],
-                                                                          invert=False)
-                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
-                    self.surfaces[u_series_id] = clipped_surface
-
-        # cut all onlap scalar fields (onlap_series_id) by unconformities younger than onlap_series_id
-        onlap_series_ids = series.get_onlap_series_ids()[::-1]
-        for onlap_series_id in onlap_series_ids:
-            # get series_ids of unconformities younger than onlap_series_id arranged older to younger
-            # so that we progressively cut onlap series by unconformities younger than onlap_series_id
-            younger_u_series_ids = series.get_unconformity_series_ids_younger_than(onlap_series_id)
-            for younger_u_series_id in younger_u_series_ids:
-                clipped_surface = self.surfaces[onlap_series_id].clip_surface(self.surfaces[younger_u_series_id],
-                                                                              invert=False)
-                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
-                    self.surfaces[onlap_series_id] = clipped_surface
-            # cut surface from unconformities below
-            older_u_series_ids = series.get_unconformity_series_ids_below(onlap_series_id)
-            # cut only the unconformity below onlap_series_id AND the last unconformity (basement)
-            older_u_series_ids = np.array([older_u_series_ids[0], older_u_series_ids[-1]])
-            for older_u_series_id in older_u_series_ids:
-                clipped_surface = self.surfaces[onlap_series_id].clip_surface(self.surfaces[older_u_series_id])
-                if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
-                    self.surfaces[onlap_series_id] = clipped_surface
+            # every series younger than basement if cut by younger unconformities
+            for s_id in series_younger_than_basement:
+                print("Processing cutting for series ", s_id)
+                younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(s_id)
+                for younger_u_series_id in younger_u_series_ids:
+                    clipped_surface = self.surfaces[s_id].clip_surface(self.surfaces[younger_u_series_id], invert=False)
+                    if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                        self.surfaces[s_id] = clipped_surface
+                below_appro_boundary_ids = series_struct.get_boundary_ids_below_to_next_unc_for_s_id_if_onlap(s_id)
+                for below_boundary in below_appro_boundary_ids:
+                    clipped_surface = self.surfaces[s_id].clip_surface(self.uncut_surfaces[below_boundary])
+                    if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                        self.surfaces[s_id] = clipped_surface
+        else:
+            series_indices = np.arange(n_series)[::-1]
+            for s_id in series_indices:
+                print("Processing cutting for series ", s_id)
+                # cut this series by every younger unconformity. Older to younger sequence
+                # cut operation removes portions above unconformity
+                younger_u_series_ids = series_struct.get_unconformity_series_ids_younger_than(s_id)
+                for younger_u_series_id in younger_u_series_ids:
+                    clipped_surface = self.surfaces[s_id].clip_surface(self.surfaces[younger_u_series_id], invert=False)
+                    if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                        self.surfaces[s_id] = clipped_surface
+                # cut this series by all boundary interfaces below s_id up until the next oldest unconformity
+                # cut operation removes portions below these boundaries
+                below_appro_boundary_ids = series_struct.get_boundary_ids_below_to_next_unc_for_s_id_if_onlap(s_id)
+                for below_boundary in below_appro_boundary_ids:
+                    clipped_surface = self.surfaces[s_id].clip_surface(self.uncut_surfaces[below_boundary])
+                    if clipped_surface.n_points != 0 and clipped_surface.n_cells != 0:
+                        self.surfaces[s_id] = clipped_surface
+        cutting_time = time.time() - start_time
+        self.model_metrics['cutting_time'] = cutting_time
 
     def write_model_args_and_metrics_to_file(self):
         filename = self.args.model_dir + "/model.txt"
@@ -639,10 +719,6 @@ class ModelOutput(object):
             ValueError("Unknown technique type")
         filename += '_' + self.args.activation
         filename += '_' + self.args.mse
-        if self.args.global_anisotropy:
-            filename += '_gp'
-        if self.args.mtl:
-            filename += '_mtl'
         filename += '_emb' + str(self.args.embed_dim)
         filename += '_nl' + str(self.args.num_hidden_layers)
         filename += '_ep' + str(self.args.num_epocs)

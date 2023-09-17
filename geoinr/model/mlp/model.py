@@ -3,89 +3,57 @@ import numpy as np
 import math
 from torch import nn
 import torch.nn.functional as F
-from geoinr.model.mlp.layers import Perceptron, SineLayer, PositionalEncoding
-from collections import OrderedDict
+import geoinr.args as args
+from geoinr.model.mlp.layers import Perceptron, PositionalEncoding
 
 
-class Siren(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, outermost_linear=False,
-                 first_omega_0=30, hidden_omega_0=30.):
-        super().__init__()
-
-        self.net = []
-        self.net.append(SineLayer(in_features, hidden_features, is_first=True, omega_0=first_omega_0))
-
-        for i in range(hidden_layers):
-            self.net.append(SineLayer(hidden_features, hidden_features, is_first=False, omega_0=hidden_omega_0))
-
-        if outermost_linear:
-            final_linear = nn.Linear(hidden_features, out_features)
-
-            with torch.no_grad():
-                w_std = np.sqrt(6 / hidden_features) / hidden_omega_0
-                final_linear.weight.uniform_(-w_std, w_std)
-                final_linear.bias.uniform_(-w_std, w_std)
-
-            self.net.append(final_linear)
-        else:
-            self.net.append(SineLayer(hidden_features, out_features, is_first=False, omega_0=hidden_omega_0))
-
-        self.net = nn.Sequential(*self.net)
-
-    def forward(self, coords):
-        coords = coords.clone().detach().requires_grad_(True)  # allows to take derivative w.r.t. input
-        output = self.net(coords)
-        return output, coords
-
-    def forward_with_activations(self, coords, retain_grad=False):
-        '''Returns not only model output, but also intermediate activations.
-        Only used for visualizing activations later!'''
-        activations = OrderedDict()
-
-        activation_count = 0
-        x = coords.clone().detach().requires_grad_(True)
-        activations['input'] = x
-        for i, layer in enumerate(self.net):
-            if isinstance(layer, SineLayer):
-                x, intermed = layer.forward_with_intermediate(x)
-
-                if retain_grad:
-                    x.retain_grad()
-                    intermed.retain_grad()
-
-                activations['_'.join((str(layer.__class__), "%d" % activation_count))] = intermed
-                activation_count += 1
-            else:
-                x = layer(x)
-
-                if retain_grad:
-                    x.retain_grad()
-
-            activations['_'.join((str(layer.__class__), "%d" % activation_count))] = x
-            activation_count += 1
-
-        return activations
+def get_activation_function_(params: args.argparse.Namespace):
+    # ['relu', 'splus, 'elu', 'gelu', 'mish', 'silu', 'selu', 'prelu', 'sin']
+    name = params.activation
+    if name == 'relu':
+        return F.relu
+    elif name == 'splus':
+        return nn.Softplus(beta=params.beta)
+    elif name == 'elu':
+        return nn.ELU()
+    elif name == 'gelu':
+        return nn.GELU()
+    elif name == 'mish':
+        return nn.Mish()
+    elif name == 'silu':
+        return nn.SiLU()
+    elif name == 'selu':
+        return nn.SELU()
+    elif name == 'prelu':
+        return nn.PReLU()
+    else:
+        return False
 
 
 class SimpleMLP(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, concat):
+    def __init__(self, in_features, params: args.argparse.Namespace, out_features):
         super().__init__()
 
+        hidden_features = params.embed_dim
+        hidden_layers = params.num_hidden_layers
+        concat = params.concat
+        activation = get_activation_function_(params)
+
         self.net = []
-        self.net.append(Perceptron(in_features, hidden_features, concat=concat))
+        self.net.append(Perceptron(in_features, hidden_features, activation, concat=concat))
 
         if concat:
             h_dim_concat = in_features + hidden_features
             for i in range(hidden_layers):
-                self.net.append(Perceptron(h_dim_concat, h_dim_concat, concat=concat))
+                self.net.append(Perceptron(h_dim_concat, h_dim_concat, activation, concat=concat))
                 h_dim_concat *= 2
 
-            self.net.append(Perceptron(h_dim_concat, out_features, is_last=True))
+            self.net.append(Perceptron(h_dim_concat, out_features, activation, is_last=True))
         else:
             for i in range(hidden_layers):
-                self.net.append(Perceptron(hidden_features, hidden_features))
+                self.net.append(Perceptron(hidden_features, hidden_features, activation))
 
-            self.net.append(Perceptron(hidden_features, out_features, is_last=True))
+            self.net.append(Perceptron(hidden_features, out_features, activation, is_last=True))
 
         self.net = nn.Sequential(*self.net)
 
@@ -96,28 +64,32 @@ class SimpleMLP(nn.Module):
 
 
 class PositionalMLP(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, concat):
+    def __init__(self, in_features, params: args.argparse.Namespace, out_features):
         super().__init__()
+        hidden_features = params.embed_dim
+        hidden_layers = params.num_hidden_layers
+        concat = params.concat
+        activation = get_activation_function_(params)
 
         self.net = []
         pos_layer = PositionalEncoding(in_features, 50, 0.5)
         #pos_layer = PosEncodingNeRF(in_features)
 
         self.net.append(pos_layer)
-        self.net.append(Perceptron(pos_layer.out_features, hidden_features, concat=concat))
+        self.net.append(Perceptron(pos_layer.out_features, hidden_features, activation, concat=concat))
 
         if concat:
             h_dim_concat = in_features + hidden_features
             for i in range(hidden_layers):
-                self.net.append(Perceptron(h_dim_concat, h_dim_concat, concat=concat))
+                self.net.append(Perceptron(h_dim_concat, h_dim_concat, activation, concat=concat))
                 h_dim_concat *= 2
 
-            self.net.append(Perceptron(h_dim_concat, out_features, is_last=True))
+            self.net.append(Perceptron(h_dim_concat, out_features, activation, is_last=True))
         else:
             for i in range(hidden_layers):
-                self.net.append(Perceptron(hidden_features, hidden_features))
+                self.net.append(Perceptron(hidden_features, hidden_features, activation))
 
-            self.net.append(Perceptron(hidden_features, out_features, is_last=True))
+            self.net.append(Perceptron(hidden_features, out_features, activation, is_last=True))
 
         self.net = nn.Sequential(*self.net)
 
@@ -128,21 +100,17 @@ class PositionalMLP(nn.Module):
 
 
 class SeriesMLP(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, concat=False, weights_file=None):
+    def __init__(self, in_features, params: args.argparse.Namespace, out_features, weights_file=None):
         super().__init__()
 
         self.n_series = out_features
         self.series_mlp = nn.ModuleList()
         for i in range(self.n_series):
-            m = SimpleMLP(in_features, hidden_features, hidden_layers, 1, concat)
-            #m = PositionalMLP(in_features, hidden_features, hidden_layers, 1, concat)
-            m.load_state_dict(torch.load(weights_file))
+            m = SimpleMLP(in_features, params, 1)
+
+            if weights_file is not None:
+                m.load_state_dict(torch.load(weights_file))
             self.series_mlp.append(m)
-            #self.series_mlp.append(SimpleMLP(in_features, hidden_features, hidden_layers, 1, concat))
-            #self.series_mlp.append(PositionalMLP(in_features, hidden_features, hidden_layers, 1, concat))
-            # self.series_mlp.append(Siren(in_features, hidden_features, hidden_layers, 1, first_omega_0=0.5,
-            #                              hidden_omega_0=0.5))
-            #self.series_mlp.append(SingleSkip(in_features, hidden_features, hidden_layers, 1))
 
     def forward(self, coords):
         coords = coords.clone().detach().requires_grad_(True)  # allows to take derivative w.r.t. input

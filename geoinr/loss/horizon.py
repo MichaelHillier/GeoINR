@@ -1,5 +1,5 @@
 import torch
-from geoinr.input.constraints.interface import Series
+from geoinr.input.constraints import series
 from geoinr.utils import derivatives
 
 
@@ -115,7 +115,7 @@ def stratigraphic_above_below_error(s_above, s_grad_norm_above, horizon_s_above,
             return strat_rel_error.mean()
 
 
-def stratigraphic_above_below_losses(scalar_pred, scalar_coords, horizon_interface_indices, series: Series):
+def stratigraphic_above_below_losses(scalar_pred, scalar_coords, horizon_interface_indices, series_struct: series.Series):
     # generate grad norm
     scalar_grad = derivatives.jacobian(scalar_pred, scalar_coords)  # [n_pts, n_series, 3]
     scalar_grad_norm = torch.norm(scalar_grad, p=2, dim=2)
@@ -129,12 +129,12 @@ def stratigraphic_above_below_losses(scalar_pred, scalar_coords, horizon_interfa
     # scalar_pred_np = scalar_pred.detach().cpu().numpy()
 
     horizon_i_losses = []
-    for horizon_id in range(series.n_horizons):
+    for horizon_id in range(series_struct.n_horizons):
         horizon_id_point_indices = horizon_interface_indices[horizon_id]
-        horizon_ids_above = series.above_below_horizons_and_series_for_horizons[horizon_id]['above_horizons']
-        series_ids_above = series.above_below_horizons_and_series_for_horizons[horizon_id]['above_series']
-        horizons_ids_below = series.above_below_horizons_and_series_for_horizons[horizon_id]['below_horizons']
-        series_ids_below = series.above_below_horizons_and_series_for_horizons[horizon_id]['below_series']
+        horizon_ids_above = series_struct.above_below_horizons_and_series_for_horizons[horizon_id]['above_horizons']
+        series_ids_above = series_struct.above_below_horizons_and_series_for_horizons[horizon_id]['above_series']
+        horizons_ids_below = series_struct.above_below_horizons_and_series_for_horizons[horizon_id]['below_horizons']
+        series_ids_below = series_struct.above_below_horizons_and_series_for_horizons[horizon_id]['below_series']
         have_horizons = False
         if horizon_ids_above is None:
             s_above = None
@@ -144,7 +144,7 @@ def stratigraphic_above_below_losses(scalar_pred, scalar_coords, horizon_interfa
             have_horizons = True
             s_above = scalar_pred[horizon_id_point_indices][:, series_ids_above]
             s_grad_norm_above = scalar_grad_norm[horizon_id_point_indices][:, series_ids_above]
-            horizon_s_above = series.mean_scalar_values_for_series.view(1, -1)[0, [horizon_ids_above]]
+            horizon_s_above = series_struct.mean_scalar_values_for_series.view(1, -1)[0, [horizon_ids_above]]
             # s_above_np = s_above.detach().cpu().numpy()
             # s_grad_norm_above_np = s_grad_norm_above.detach().cpu().numpy()
         if horizons_ids_below is None:
@@ -155,7 +155,7 @@ def stratigraphic_above_below_losses(scalar_pred, scalar_coords, horizon_interfa
             have_horizons = True
             s_below = scalar_pred[horizon_id_point_indices][:, series_ids_below]
             s_grad_norm_below = scalar_grad_norm[horizon_id_point_indices][:, series_ids_below]
-            horizon_s_below = series.mean_scalar_values_for_series.view(1, -1)[0, [horizons_ids_below]]
+            horizon_s_below = series_struct.mean_scalar_values_for_series.view(1, -1)[0, [horizons_ids_below]]
             # s_below_np = s_below.detach().cpu().numpy()
             # s_grad_norm_below_np = s_grad_norm_below.detach().cpu().numpy()
         if have_horizons:

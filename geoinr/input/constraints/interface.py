@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 import pyvista as pv
+from geoinr.input.constraints import series
 from geoinr.input.readers import reader_xml_polydata_file
 from geoinr.utils.vtk_utils import add_np_property_to_vtk_object, create_vtk_polydata_from_coords_and_property
 from vtkmodules.all import vtkPolyData
@@ -25,299 +26,6 @@ def convert_vtkPolydata_contact_to_dataframe(poly: vtkPolyData):
     contact_df = pd.DataFrame(data, columns=['x', 'y', 'z', 'level'])
 
     return contact_df
-
-
-class Series(object):
-    def __init__(self, interface_info_file):
-        """
-        :param interface_info_file: csv file
-            index formation_name unit_code relation
-            0     rock a               12  erosional
-            1     rock b               13  onlap
-            2     rock c               14  onlap
-            3     rock d               15  onlap
-            4     rock e               16  erosional
-            5     rock f               17  erosional
-            6     rock g               18  erosional
-        unit_code = 12 younger than unit_code = 13. unit_code 18 is oldest. unit_code 12 is youngest.
-        actual unit_code value not meaning, the order is what is meaningful. and captures the relevant info
-        """
-        # read csv file containing series/interface info
-        self.series_info_df = pd.read_csv(interface_info_file)
-        self.n_horizons = len(self.series_info_df.index)
-        self.n_unit_classes = self.n_horizons + 1
-        self.horizon_level_code = self.series_info_df['fm_code'].to_dict()
-        self.unit_level_code = self.build_unit_level_code()
-
-        # build horizon indices for each series and create tuple (horizon_indices, relationship)
-        # for each stored in a list
-        series = []
-        onlap_horizon_indices = []
-        for index, row in self.series_info_df.iterrows():
-            if row['relationship'] == 'erosional':
-                if onlap_horizon_indices:
-                    series.append((onlap_horizon_indices, 'onlap'))
-                    onlap_horizon_indices = []  # reset
-                series.append((index, 'erosional'))
-            if row['relationship'] == 'onlap':
-                onlap_horizon_indices.append(index)
-        if onlap_horizon_indices:
-            series.append((onlap_horizon_indices, 'onlap'))
-        self.series = series
-        self.n_series = len(self.series)
-        self.mean_scalar_values_for_series = None
-        self.series_dict = None  # key = series_id, value = list of horizon indices associated with series
-        self.unconformity_dict = None  # key = series_id, value = horizon index associated with series
-        self.unit_dict = None  # key = series_id, value = list of unit_ids associated with series
-        self.series_df = None
-        self.series_cutting_sequence = None
-        self.cutting_series_is_onlap = None
-        self.above_below_horizons_and_series_for_units = None
-        self.above_below_horizons_and_series_for_horizons = None
-        self.build_dictionaries_and_dataframe()
-        self.generate_sequence_for_series_cutting()
-        self.build_geological_domains()
-        self.generate_above_below_horizons_and_series_for_units()
-        self.generate_above_below_horizons_and_series_for_horizons()
-        self.build_unit_dictionary()
-        t = 6
-
-    def build_dictionaries_and_dataframe(self):
-        series_dict = {}
-        unconformity_dict = {}
-        relations = []
-        horizon_indices = []
-        series_id = []
-        for index, (horizon_i_indices, horizon_i_relation) in enumerate(self.series):
-            series_id.append(index)
-            relations.append(horizon_i_relation)
-            if horizon_i_relation == 'erosional':
-                unconformity_dict[index] = horizon_i_indices
-            if not isinstance(horizon_i_indices, list):
-                horizon_i_indices = [horizon_i_indices]
-            horizon_indices.append(horizon_i_indices)
-            series_dict[index] = horizon_i_indices
-        interface_s_id = {}
-        for s_id, interface_indices in series_dict.items():
-            for interface_index in interface_indices:
-                interface_s_id[interface_index] = s_id
-        interface_unit_above = {}
-        interface_unit_below = {}
-        for i, interface_index in enumerate(interface_s_id.keys()):
-            interface_unit_above[interface_index] = i
-            interface_unit_below[interface_index] = i + 1
-        self.series_info_df['series_id'] = self.series_info_df.index.map(interface_s_id)
-        self.series_info_df['unit_above'] = self.series_info_df.index.map(interface_unit_above)
-        self.series_info_df['unit_below'] = self.series_info_df.index.map(interface_unit_below)
-        self.series_dict = series_dict
-        self.unconformity_dict = unconformity_dict
-        self.series_df = pd.DataFrame({'s_id': series_id,
-                                       'horizon_indices': horizon_indices,
-                                       'relationship': relations})
-
-    def build_unit_level_code(self):
-        unit_level_code = {}
-        for i, (horizon_id, horizon_level_code) in enumerate(self.horizon_level_code.items()):
-            unit_level_code[i] = horizon_level_code - 1
-        unit_level_code[self.n_unit_classes - 1] = self.horizon_level_code[self.n_horizons - 1]
-        return unit_level_code
-
-    def build_geological_domains(self):
-
-        domain_below_interfaces_idxs = []
-        below_interface_idxs = []  # temp container
-        domain_idxs = []
-        domain_idx = 0
-        for interface_idx in self.series_info_df.index:
-            below_interface_idxs.append(interface_idx)
-            domain_idxs.append(domain_idx)
-            if self.series_info_df['relationship'][interface_idx] == 'erosional':
-                domain_below_interfaces_idxs.append(below_interface_idxs)
-                below_interface_idxs = []
-                domain_idx += 1
-        self.series_info_df['domain_idx'] = domain_idxs
-        self.geo_domain_info_df = pd.DataFrame.from_dict({'below_interface_idxs': domain_below_interfaces_idxs})
-
-    def build_unit_dictionary(self):
-        """-
-        builds a dictionary associating unit ids to specific series ids
-        unit ids are build younger to older; older unit ids are larger than younger units
-        key = series id
-        value = list of unit ids
-        """
-        unit_dict = {i: [] for i in range(self.n_series)}
-        unit_id = 0
-
-        for i in range(self.series_cutting_sequence.size):
-            series_id = self.series_cutting_sequence[i]
-            if self.cutting_series_is_onlap[i]:
-                for j in range(len(self.series_dict[series_id])):
-                    unit_dict[series_id].append(unit_id)
-                    unit_id += 1
-                # add unit id for below last onlap series horizon
-                unit_dict[series_id].append(unit_id)
-                unit_id += 1
-            else:
-                unit_dict[series_id].append(unit_id)
-                unit_id += 1
-        # add unit id for below basement
-        unit_dict[self.n_series - 1].append(unit_id)
-        self.unit_dict = unit_dict
-
-    def get_unconformity_series_ids_younger_than(self, series_id):
-        younger_unconformity_df = self.series_df.loc[(self.series_df['relationship'] == 'erosional') &
-                                                     (self.series_df['s_id'] < series_id)]
-        younger_unconformity_series_id = younger_unconformity_df['s_id'].values
-        # return s_ids from older(large) to younger(smaller)
-        return younger_unconformity_series_id[::-1]
-
-    def get_unconformity_series_ids(self):
-        unconformity_df = self.series_df.loc[self.series_df['relationship'] == 'erosional']
-        return unconformity_df['s_id'].values
-
-    def get_onlap_series_ids(self):
-        onlap_df = self.series_df.loc[self.series_df['relationship'] == 'onlap']
-        return onlap_df['s_id'].values
-
-    def get_unconformity_series_ids_below(self, series_id):
-        unconformity_df = self.series_df.loc[(self.series_df['relationship'] == 'erosional') &
-                                             (self.series_df['s_id'] > series_id)]
-        older_unconformity_series_id = unconformity_df['s_id'].values
-        return older_unconformity_series_id
-
-    def set_mean_scalar_values_for_series(self, series_mean_scalar_values: torch.Tensor):
-        self.mean_scalar_values_for_series = series_mean_scalar_values
-
-    def generate_sequence_for_series_cutting(self):
-        """
-        This function determines which series to cut. A series that is cut will generate a domain in which is valid
-        for series. This information is used in a sequential manner to respect the geological history. Processed
-        younger to older.
-        The data structures built here optimize the cutting methods used later.
-        Example:
-        Series {0: [0], 1: [1, 2, 3], 2: [4], 3: [5], 4: [6] }, Unconformity {0: 0, 2: 4, 3: 5, 4: 6}
-        key = series id, value = horizon indices
-
-        series_cutting_sequence: [0, 1, 3, 4] (series ids)
-                         cut_by: [0, 2, 3, 4] (unconformity series ids)
-        cutting_series_is_onlap: [False, True, False, False]
-        NOTE: Series 2 is NOT cut b/c we use this series ONLY to cut the onlap series deposited on top of 2. We don't
-              need it to assigned units or record resultant scalar fields.
-        Encodes series_cutting_sequence (integer array) AND cutting_series_is_onlap (boolean array)
-        """
-        unconformity_series_ids = self.get_unconformity_series_ids()
-
-        series_id = [0]
-        for i in range(unconformity_series_ids.size - 1):
-            series_id.append(unconformity_series_ids[i] + 1)
-        self.series_cutting_sequence = np.array(series_id)
-
-        onlap_series_ids = self.get_onlap_series_ids()
-        is_onlap = []
-        for domain_index in self.series_cutting_sequence:
-            if np.isin(domain_index, onlap_series_ids):
-                is_onlap.append(True)
-            else:
-                is_onlap.append(False)
-        self.cutting_series_is_onlap = np.array(is_onlap)
-
-    def generate_above_below_horizons_and_series_for_units(self):
-        above_below_horizons_and_series = {}
-        for unit_id in range(self.n_unit_classes):
-            unit_bounded_horizons = {}
-            if unit_id == 0:
-                bounded_horizons = (None, unit_id)
-            elif unit_id == (self.n_unit_classes - 1):
-                bounded_horizons = (unit_id - 1, None)
-            else:
-                bounded_horizons = (unit_id - 1, unit_id)
-            # get series associated with top horizon
-            above_horizons = None
-            above_series = None
-            if bounded_horizons[0] is not None:
-                # get horizons above and including bounded_horizon[0]
-                above_horizons = np.arange(bounded_horizons[0] + 1).tolist()
-                # find series id associated with above horizons
-                above_series = []
-                for above_horizon in above_horizons:
-                    for series_id, horizon_ids in self.series_dict.items():
-                        if above_horizon in horizon_ids:
-                            above_series.append(series_id)
-                            break
-            below_horizons = None
-            below_series = None
-            if bounded_horizons[1] is not None:
-                # find the interfaces below unit_id within the geological domain associated with unit
-                # get geological domain index
-                domain_idx = self.series_info_df.iloc[unit_id]['domain_idx']  # unit_id == below horizon id
-                below_horizons = [interface_idx for interface_idx in
-                                  self.geo_domain_info_df.iloc[domain_idx]['below_interface_idxs'] if
-                                  interface_idx >= unit_id]
-                if below_horizons:
-                    below_series = []
-                    for below_horizon in below_horizons:
-                        for series_id, horizon_ids in self.series_dict.items():
-                            if below_horizon in horizon_ids:
-                                below_series.append(series_id)
-                                break
-                else:
-                    below_horizons = None
-
-            above_below_horizons_and_series[unit_id] = {'above_horizons': above_horizons,
-                                                        'above_series': above_series,
-                                                        'below_horizons': below_horizons,
-                                                        'below_series': below_series}
-
-        self.above_below_horizons_and_series_for_units = above_below_horizons_and_series
-
-    def generate_above_below_horizons_and_series_for_horizons(self):
-        # Go from youngest to oldest
-        above_below_horizons_and_series = {}
-        for horizon_id in range(self.n_horizons):
-            bounded_horizons = {}
-            if horizon_id == 0:
-                bounded_horizons = (None, horizon_id + 1)
-            elif horizon_id == (self.n_horizons - 1):
-                bounded_horizons = (horizon_id - 1, None)
-            else:
-                bounded_horizons = (horizon_id - 1, horizon_id + 1)
-            # get series associated with top horizon
-            above_horizons = None
-            above_series = None
-            if bounded_horizons[0] is not None:
-                # get horizons above and including bounded_horizon[0]
-                above_horizons = np.arange(bounded_horizons[0] + 1).tolist()
-                # find series id associated with above horizons
-                above_series = []
-                for above_horizon in above_horizons:
-                    for series_id, horizon_ids in self.series_dict.items():
-                        if above_horizon in horizon_ids:
-                            above_series.append(series_id)
-                            break
-            below_horizons = None
-            below_series = None
-            if bounded_horizons[1] is not None:
-                # find the interfaces below horizon_id within the geological domain associated with it
-                # get geological domain index
-                domain_idx = self.series_info_df.iloc[horizon_id]['domain_idx']
-                below_horizons = [interface_idx for interface_idx in self.geo_domain_info_df.iloc[domain_idx]['below_interface_idxs'] if interface_idx > horizon_id]
-                if below_horizons:
-                    below_series = []
-                    for below_horizon in below_horizons:
-                        for series_id, horizon_ids in self.series_dict.items():
-                            if below_horizon in horizon_ids:
-                                below_series.append(series_id)
-                                break
-                else:
-                    below_horizons = None
-
-            above_below_horizons_and_series[horizon_id] = {'above_horizons': above_horizons,
-                                                           'above_series': above_series,
-                                                           'below_horizons': below_horizons,
-                                                           'below_series': below_series}
-        above_below_interfaces_for_interfaces = pd.DataFrame.from_dict(above_below_horizons_and_series, orient='index')
-        self.series_info_df = self.series_info_df.join(above_below_interfaces_for_interfaces, lsuffix='_caller', rsuffix='_other')
-        self.above_below_horizons_and_series_for_horizons = above_below_horizons_and_series
 
 
 class InterfaceData(object):
@@ -387,12 +95,16 @@ class InterfaceData(object):
                 else:
                     self.build_from_data_and_level_data_mode(args[0], args[1], args[2])
             else:
-                raise IOError("Unexpected number of inputted arguments into InterfaceData constructor")
+                if isinstance(args[3], bool) and isinstance(args[4], bool):
+                    self.build_data_from_files(args[0], args[1], args[2], args[3], args[4])
+                else:
+                    raise IOError("Unexpected number of inputted arguments into InterfaceData constructor")
         else:
             raise IOError("Unexpected number of inputted arguments into InterfaceData constructor")
         t = 7
 
-    def build_data_from_files(self, interface_file: str, level_data_mode: int, interface_info_file=None):
+    def build_data_from_files(self, interface_file: str, level_data_mode: int, interface_info_file=None, efficient=True,
+                              youngest_unit_sampled=False):
         # Read VTK file containing interface data
         if not os.path.isfile(interface_file):
             raise ValueError('File for interface data does not exist')
@@ -400,7 +112,7 @@ class InterfaceData(object):
         if interface_info_file is not None:
             if not os.path.isfile(interface_info_file):
                 raise ValueError('File for interface info (series) does not exist')
-            self.series = Series(interface_info_file)
+            self.series = series.Series(interface_info_file, efficient, youngest_unit_sampled)
         # Get data bounds [xmin, xmax, ymin, ymax, zmin, zmax]
         self.interface_bounds = self.interface_vtk.GetBounds()
         # Create pandas dataframe

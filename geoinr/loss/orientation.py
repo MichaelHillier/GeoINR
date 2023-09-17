@@ -79,3 +79,26 @@ def norm_loss_multiple_series(scalar_pred, scalar_coords, series_dict):
         norm.append(norm_constraint)
     norm = torch.cat(norm)
     return norm
+
+
+def normal_loss(normal_scalar_pred, normal_scalar_coords, normal_data):
+    scalar_grad = derivatives.gradient(normal_scalar_pred, normal_scalar_coords)
+    grad_norm = torch.norm(scalar_grad, p=2, dim=1)
+
+    grad_inner_product = torch.einsum('ij, ij->i', normal_data, scalar_grad)
+    cosine = grad_inner_product / grad_norm
+
+    return torch.mean(1 - cosine)
+
+
+def normal_loss_multiple_series(normal_scalar_pred, normal_scalar_coords, normal_data):
+    n_series = normal_scalar_pred.shape[-1]
+    loss_normal = []
+    for j in range(n_series):
+        normal_grad = derivatives.gradient(normal_scalar_pred[:, j], normal_scalar_coords)
+        normal_grad_norm = torch.norm(normal_grad, p=2, dim=1)
+        normal_inner_product = torch.einsum('ij, ij->i', normal_data, normal_grad)
+        cosine = normal_inner_product / normal_grad_norm
+        loss_normal.append(torch.mean(1 - cosine))
+
+    return torch.stack(loss_normal).sum()

@@ -9,7 +9,7 @@ class custom_scalar(object):
 
         self.coord_range = self.coord_max - self.coord_min
         range_max = self.coord_range.max()
-        self.scale_range = np.array([range_max, range_max, self.coord_range[2]])
+        self.scale_range = np.array([range_max, range_max, range_max])
         self.scale_ = 1.0 / self.scale_range
 
     def transform(self, coords):
@@ -138,3 +138,20 @@ def get_data_scalar_from_bounds(bounds):
     scalar = MinMaxScaler((-1, 1))
     scalar.fit(domain_corner_points)
     return scalar
+
+
+def get_scaler(scaler: str, points: np.ndarray, scale_range):
+    # Possibilities: [minmax, standard, custom1, custom2, custom3]
+    if scaler == 'custom1':
+        return custom_scalar(points)
+    elif scaler == 'custom2':
+        return custom_scalar2(points)
+    elif scaler == 'custom3':
+        if scale_range is None:
+            return custom_scalar3(points)
+        else:
+            return custom_scalar3(points, mininum=scale_range[0], maximum=scale_range[1])
+    elif scaler == 'minmax':
+        return get_data_scalar_from_bounds(points)
+    else:
+        return get_data_scalar_from_coords(points)

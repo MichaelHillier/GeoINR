@@ -4,53 +4,8 @@ import torch.nn.functional as F
 from torch import nn
 
 
-class SineLayer(nn.Module):
-    # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of omega_0.
-
-    # If is_first=True, omega_0 is a frequency factor which simply multiplies the activations before the
-    # nonlinearity. Different signals may require different omega_0 in the first layer - this is a
-    # hyperparameter.
-
-    # If is_first=False, then the weights will be divided by omega_0 so as to keep the magnitude of
-    # activations constant, but boost gradients to the weight matrix (see supplement Sec. 1.5)
-
-    def __init__(self, in_features, out_features, bias=True,
-                 is_first=False, omega_0=30, trainable_omega=True):
-        super().__init__()
-
-        if not trainable_omega:
-            self.omega_0 = omega_0
-        else:
-            self.omega_0 = nn.Parameter(torch.Tensor(1).fill_(omega_0))
-
-        self.is_first = is_first
-
-        self.in_features = in_features
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
-
-        self.init_weights()
-
-    def init_weights(self):
-        with torch.no_grad():
-            if self.is_first:
-                dim = 1
-            else:
-                dim = self.in_features
-            w_std = (1 / dim) if self.is_first else (np.sqrt(6 / dim) / float(self.omega_0))
-            self.linear.weight.uniform_(-w_std, w_std)
-            self.linear.bias.uniform_(-w_std, w_std)
-
-    def forward(self, input):
-        return torch.sin(self.omega_0 * self.linear(input))
-
-    def forward_with_intermediate(self, input):
-        # For visualization of activation distributions
-        intermediate = self.omega_0 * self.linear(input)
-        return torch.sin(intermediate), intermediate
-
-
 class Perceptron(nn.Module):
-    def __init__(self, in_features, out_features, bias=True, is_last=False, concat=False):
+    def __init__(self, in_features, out_features, activation, bias=True, is_last=False, concat=False):
         super().__init__()
 
         self.in_features = in_features
@@ -59,14 +14,7 @@ class Perceptron(nn.Module):
         self.bias = bias
         self.is_last = is_last
         self.concat = concat
-        #self.activation = F.relu
-        self.activation = nn.Softplus(beta=100)
-        #self.activation = nn.ELU()
-        #self.activation = nn.GELU()
-        #self.activation = nn.Mish()
-        #self.activation = nn.SiLU()
-        #self.activation = nn.SELU()
-        #self.activation = nn.PReLU()
+        self.activation = activation
 
         self.init_weights()
 
