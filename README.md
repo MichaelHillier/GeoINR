@@ -52,5 +52,19 @@ Results were generated on Windows 10 within Pycharm using:
 - scikit-learn 1.0.2
 - pandas 1.4.0
 
+# GMD case study script commands
+Case Study 1
+```
+python strat_rel_w_global.py --dataset=unconformities --interface_file=markers.vtp --metadata_file=marker_info.csv --beta=100 --lambda_g=0.1 --num_epocs=5000 --scale_method=custom3 --xy_resolution=5000 --z_resolution=20 --xy_buffer=0.0 --z_buffer=0.0
+python strat_rel_w_units_global.py --dataset=unconformities --interface_file=markers.vtp --unit_file=units.vtp --metadata_file=marker_info.csv --beta=100 --lambda_g=0.1 --num_epocs=5000 --scale_method=custom3 --xy_resolution=5000 --z_resolution=20 --xy_buffer=0.0 --z_buffer=0.0
+```
+Case Study 2
+```
+python strat_rel_w_units_global.py --dataset=cbaf --interface_file=markers_6.vtp --unit_file=intraformational.vtp --metadata_file=marker_info.csv --beta=20 --lambda_g=0.0 --num_epocs=2000 --scale_method=custom1 --xy_resolution=100 --z_resolution=10 --xy_buffer=0.0001 --z_buffer=13 --efficient --youngest_unit_sampled
+python strat_units_normals.py --dataset=cbaf --interface_file=markers_6.vtp --unit_file=intraformational.vtp --normal_file=normals2.vtp --metadata_file=marker_info.csv --beta=20 --lambda_g=0.0 --num_epocs=2000 --scale_method=custom1 --xy_resolution=100 --z_resolution=10 --xy_buffer=0.0001 --z_buffer=13 --efficient --youngest_unit_sampled
+python strat_units_normals.py --dataset=cbaf --interface_file=markers_16.vtp --unit_file=intraformational.vtp --normal_file=normals2.vtp --metadata_file=marker_info.csv --beta=20 --lambda_g=0.0 --num_epocs=2000 --scale_method=custom1 --xy_resolution=100 --z_resolution=10 --xy_buffer=0.0001 --z_buffer=13 --efficient --youngest_unit_sampled
+python strat_units_normals.py --dataset=cbaf --interface_file=markers_26.vtp --unit_file=intraformational.vtp --normal_file=normals2.vtp --metadata_file=marker_info.csv --beta=20 --lambda_g=0.0 --num_epocs=2000 --scale_method=custom1 --xy_resolution=100 --z_resolution=10 --xy_buffer=0.0001 --z_buffer=13 --efficient --youngest_unit_sampled
+python strat_units_normals.py --dataset=cbaf --interface_file=markers_45.vtp --unit_file=intraformational.vtp --normal_file=normals2.vtp --metadata_file=marker_info.csv --beta=20 --lambda_g=0.0 --num_epocs=2000 --scale_method=custom1 --xy_resolution=100 --z_resolution=10 --xy_buffer=0.0001 --z_buffer=13 --efficient --youngest_unit_sampled
+```
 # Other scripts
 Other scripts contained within train/mlp/implicit were earlier experiments that lead to improving the methodology. Left these here because they may be useful in the future.
