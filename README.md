@@ -13,6 +13,7 @@ conda install -c conda-forge pyvista
 conda install matplotlib
 conda install scikit-learn
 conda install pandas
+conda install seaborn -c conda-forge
 ```
 
 # Inputs
